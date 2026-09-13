@@ -319,6 +319,7 @@
     #printFrame .frame-grid{gap:2.8mm;padding:4mm 0}
     #printFrame .frame-tile{border-radius:4mm}
     #printFrame .frame-tile.frame-center{background:linear-gradient(145deg,#073A2A,#0B5D3B 58%,#137448)!important;border:1.2mm solid #E6A821!important;box-shadow:none!important}
+    #printFrame .print-snapshot{display:block!important;width:100%!important;height:100%!important;object-fit:contain!important;object-position:center!important;margin:0!important;padding:0!important}
     #printFrame .frame-tile-content{padding:3.5mm}
     #printFrame .frame-area{font-size:6.5pt}
     #printFrame .frame-dream{font-size:10.5pt}
@@ -1150,11 +1151,13 @@ input::placeholder,textarea::placeholder{color:#858D88;opacity:1}
     const rr=Math.min(r,w/2,h/2); ctx.beginPath(); ctx.moveTo(x+rr,y); ctx.arcTo(x+w,y,x+w,y+h,rr); ctx.arcTo(x+w,y+h,x,y+h,rr); ctx.arcTo(x,y+h,x,y,rr); ctx.arcTo(x,y,x+w,y,rr); ctx.closePath();
   }
 
-  async function downloadFramePNG(){
+  async function buildFrameCanvas(){
+    // Gera uma única imagem rasterizada do quadro. Isso evita que navegadores móveis
+    // deixem de carregar as fotos no momento de imprimir/salvar em PDF.
     renderFrameBoard();
     const W=3508,H=2480,margin=140,gap=34,top=430,bottom=200;
     const canvas=document.createElement('canvas'); canvas.width=W; canvas.height=H;
-    const ctx=canvas.getContext('2d');
+    const ctx=canvas.getContext('2d',{alpha:false});
     ctx.fillStyle='#FFFCF5'; ctx.fillRect(0,0,W,H);
     ctx.fillStyle='#A86E10'; ctx.font='800 34px Arial'; ctx.fillText('MURAL DOS SONHOS',margin,142);
     ctx.fillStyle='#103B23'; ctx.font='600 84px Georgia';
@@ -1164,7 +1167,9 @@ input::placeholder,textarea::placeholder{color:#858D88;opacity:1}
     ctx.strokeStyle='#BFCFC4'; ctx.lineWidth=4; ctx.beginPath();ctx.moveTo(margin,365);ctx.lineTo(W-margin,365);ctx.stroke();
     const gridW=W-2*margin, gridH=H-top-bottom, cw=(gridW-gap*3)/4, ch=(gridH-gap*2)/3;
     const images={};
-    for(const d of state.dreams){ if(d.image && !images[d.category]) images[d.category]=await loadImage(d.image); }
+    for(const d of state.dreams){
+      if(d.image && !images[d.category]) images[d.category]=await loadImage(d.image);
+    }
     const lightFills=['#EAF0EB','#F4EEDC','#EDF3EE','#F2F0E7','#E7EFEA','#F4E9D3','#EDF1E8','#F3F4EE','#E9F0EA','#F5EFE1','#EBF1EC']; let fi=0;
     for(let i=0;i<FRAME_LAYOUT.length;i++){
       const row=Math.floor(i/4), col=i%4, x=margin+col*(cw+gap), y=top+row*(ch+gap), area=FRAME_LAYOUT[i];
@@ -1174,10 +1179,13 @@ input::placeholder,textarea::placeholder{color:#858D88;opacity:1}
         ctx.textAlign='center'; ctx.fillStyle='#F0D18C'; ctx.font='800 24px Arial'; ctx.fillText('TALENTO PARTILHADO',x+cw/2,y+125);
         ctx.fillStyle='#FFFFFF'; ctx.font='600 58px Georgia';
         const l=wrappedLines(ctx,state.board.title||DEFAULT_BOARD.title,cw-100,3); l.forEach((t,j)=>ctx.fillText(t,x+cw/2,y+220+j*64));
+        ctx.textAlign='left';
       } else {
         const dreams=state.dreams.filter(d=>d.category===area), img=images[area];
-        if(img){ drawFittedImage(ctx,img,x,y,cw,ch); const g=ctx.createLinearGradient(x,y,x,y+ch);g.addColorStop(0,'rgba(7,30,18,.08)');g.addColorStop(1,'rgba(7,30,18,.86)');ctx.fillStyle=g;ctx.fillRect(x,y,cw,ch); }
-        else {ctx.fillStyle=lightFills[fi++%lightFills.length];ctx.fillRect(x,y,cw,ch);}
+        if(img){
+          drawFittedImage(ctx,img,x,y,cw,ch);
+          const g=ctx.createLinearGradient(x,y,x,y+ch);g.addColorStop(0,'rgba(7,30,18,.08)');g.addColorStop(1,'rgba(7,30,18,.86)');ctx.fillStyle=g;ctx.fillRect(x,y,cw,ch);
+        } else {ctx.fillStyle=lightFills[fi++%lightFills.length];ctx.fillRect(x,y,cw,ch);}
         const base=img?'#F4D795':'#A86E10', main=img?'#FFFFFF':'#103B23', muted=img?'rgba(255,255,255,.78)':'#6F7B74';
         ctx.fillStyle=base; ctx.font='800 23px Arial'; ctx.fillText(area.toUpperCase(),x+34,y+48);
         if(dreams.length){
@@ -1200,7 +1208,115 @@ input::placeholder,textarea::placeholder{color:#858D88;opacity:1}
     ctx.strokeStyle='#BFCFC4';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(margin,H-135);ctx.lineTo(W-margin,H-135);ctx.stroke();
     ctx.fillStyle='#174F2D';ctx.font='700 25px Arial';ctx.fillText('Talento Partilhado · Sabedoria e Prosperidade',margin,H-78);
     ctx.fillStyle='#6F7B74';ctx.font='italic 25px Georgia'; const q=state.board.quote||DEFAULT_BOARD.quote; const qx=W-margin-ctx.measureText(q).width; if(qx>W/2) ctx.fillText(q,qx,H-78);
-    const a=document.createElement('a'); a.download='mural-dos-sonhos-talento-partilhado.png'; a.href=canvas.toDataURL('image/png'); a.click(); toast('Imagem do quadro baixada.');
+    return canvas;
+  }
+
+  function canvasToBlob(canvas,type='image/png',quality=1){
+    return new Promise((resolve,reject)=>{
+      canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('Não foi possível gerar a imagem.')),type,quality);
+    });
+  }
+
+  function isMobileLike(){
+    return matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
+  }
+
+  async function downloadFramePNG(){
+    const btn=$('#downloadPngBtn');
+    const original=btn?.innerHTML;
+    const mobile=isMobileLike();
+    let fallbackWindow=null;
+    let likelyFileShare=false;
+
+    // Alguns Safaris móveis ignoram completamente o atributo `download`.
+    // Se o compartilhamento de arquivos não estiver disponível, abrimos uma aba
+    // ainda dentro do gesto do toque para garantir um destino onde a imagem possa ser salva.
+    if(mobile && typeof File!=='undefined' && navigator.share && navigator.canShare){
+      try{
+        const probe=new File([new Blob(['x'],{type:'text/plain'})],'x.txt',{type:'text/plain'});
+        likelyFileShare=navigator.canShare({files:[probe]});
+      }catch(_){}
+    }
+    if(mobile && !likelyFileShare){
+      try{
+        fallbackWindow=window.open('about:blank','_blank');
+        if(fallbackWindow){
+          fallbackWindow.document.title='Preparando Mural dos Sonhos';
+          fallbackWindow.document.body.innerHTML='<p style="font-family:Arial,sans-serif;padding:24px;color:#174F2D">Preparando a imagem do mural...</p>';
+        }
+      }catch(_){}
+    }
+
+    if(btn){btn.disabled=true; btn.setAttribute('aria-busy','true');}
+    toast('Preparando a imagem do mural...');
+    try{
+      const canvas=await buildFrameCanvas();
+      const blob=await canvasToBlob(canvas,'image/png');
+      const filename='mural-dos-sonhos-talento-partilhado.png';
+      const file=typeof File!=='undefined' ? new File([blob],filename,{type:'image/png'}) : null;
+
+      // No celular, prioriza a folha de compartilhamento nativa. Ela oferece
+      // Salvar em Fotos/Arquivos e funciona melhor do que `a.download` no iOS.
+      if(mobile && file && navigator.share && navigator.canShare?.({files:[file]})){
+        if(fallbackWindow){try{fallbackWindow.close();}catch(_){}}
+        try{
+          await navigator.share({files:[file],title:'Mural dos Sonhos'});
+          toast('Imagem pronta. Escolha onde salvar ou compartilhar.');
+          return;
+        }catch(err){
+          if(err?.name==='AbortError') return;
+          // Se o compartilhamento falhar, seguimos para o fallback abaixo.
+        }
+      }
+
+      const url=URL.createObjectURL(blob);
+      if(mobile && fallbackWindow && !fallbackWindow.closed){
+        fallbackWindow.location.href=url;
+        toast('Imagem aberta. Use Compartilhar para salvar em Fotos ou Arquivos.');
+        setTimeout(()=>URL.revokeObjectURL(url),120000);
+        return;
+      }
+
+      const a=document.createElement('a');
+      a.href=url; a.download=filename; a.rel='noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+      toast(mobile?'Imagem gerada. Se ela abrir no navegador, use Compartilhar > Salvar imagem/Arquivos.':'Imagem do quadro baixada.');
+    }catch(err){
+      console.error(err);
+      if(fallbackWindow && !fallbackWindow.closed){try{fallbackWindow.close();}catch(_){}}
+      toast('Não foi possível gerar a imagem. Tente novamente.');
+    }finally{
+      if(btn){btn.disabled=false; btn.removeAttribute('aria-busy'); if(original) btn.innerHTML=original;}
+    }
+  }
+
+  let activePrintUrl='';
+  async function printFrameAsSnapshot(){
+    const btn=$('#printFrameBtn');
+    if(btn){btn.disabled=true;btn.setAttribute('aria-busy','true');}
+    toast('Preparando o quadro com as fotos para impressão...');
+    try{
+      const canvas=await buildFrameCanvas();
+      const blob=await canvasToBlob(canvas,'image/jpeg',.94);
+      if(activePrintUrl) URL.revokeObjectURL(activePrintUrl);
+      activePrintUrl=URL.createObjectURL(blob);
+      els.printFrame.innerHTML=`<img class="print-snapshot" alt="Mural dos Sonhos pronto para impressão" src="${activePrintUrl}">`;
+      const img=els.printFrame.querySelector('.print-snapshot');
+      if(img?.decode){ try{ await img.decode(); }catch(_){} }
+      else if(img && !img.complete){ await new Promise(resolve=>{img.onload=img.onerror=resolve;}); }
+
+      document.body.style.overflow='';
+      document.body.classList.add('print-frame');
+      // Um pequeno atraso depois do decode ajuda Safari/iOS a incluir o bitmap no PDF.
+      setTimeout(()=>window.print(),180);
+    }catch(err){
+      console.error(err);
+      toast('Não foi possível preparar o PDF. Tente novamente.');
+      if(btn){btn.disabled=false;btn.removeAttribute('aria-busy');}
+    }
   }
 
   function renderAll(){ renderBoardHeader(); renderFilters(); renderStats(); renderDreams(); if(els.frameModal.classList.contains('open')) renderFrameBoard(); }
@@ -1355,14 +1471,14 @@ input::placeholder,textarea::placeholder{color:#858D88;opacity:1}
 
   ['#frameBtn','#printBtn','#printBtnTop','#mobilePrintBtn'].forEach(s=>$(s)?.addEventListener('click',openFrame));
   $('#downloadPngBtn').addEventListener('click',downloadFramePNG);
-  $('#printFrameBtn').addEventListener('click',()=>{
-    renderFrameBoard();
-    document.body.style.overflow='';
-    document.body.classList.add('print-frame');
-    setTimeout(()=>window.print(),60);
-  });
+  $('#printFrameBtn').addEventListener('click',printFrameAsSnapshot);
   window.addEventListener('afterprint',()=>{
     document.body.classList.remove('print-frame');
+    const btn=$('#printFrameBtn');
+    if(btn){btn.disabled=false;btn.removeAttribute('aria-busy');}
+    if(activePrintUrl){setTimeout(()=>{URL.revokeObjectURL(activePrintUrl);activePrintUrl='';},1000);}
+    // Restaura o HTML do quadro para a próxima visualização/edição.
+    renderFrameBoard();
     if(els.frameModal.classList.contains('open')) document.body.style.overflow='hidden';
   });
 
